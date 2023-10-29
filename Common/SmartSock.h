@@ -5,7 +5,11 @@
 #pragma once
 
 
+#define _WINSOCKAPI_  // windows.hを定義した際に、winsock.hを自動的にインクルードしない
+#include <windows.h>
 #include <WinSock2.h>
+
+#include <ws2tcpip.h>
 
 
 // WinSock2タイムアウト対応ラッパークラス	http://2sen.dip.jp/friio/

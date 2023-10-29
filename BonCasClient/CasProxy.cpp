@@ -6,12 +6,14 @@
 #include "StdAfx.h"
 #include "CasProxy.h"
 
+#include <sysinfoapi.h>
+
 
 #define WM_BONCASPROXY_EVENT		(WM_USER + 100U)
 #define TCP_TIMEOUT					1000UL				// 1秒
 
 
-DWORD CCasProxy::dwErrorDelayTime = 0UL;
+ULONGLONG CCasProxy::m_ErrorDelayTime = 0ULL;
 
 
 CCasProxy::CCasProxy(const HWND hProxyHwnd)
@@ -37,9 +39,9 @@ const void CCasProxy::Setting(const DWORD dwIP, const WORD wPort)
 const BOOL CCasProxy::Connect(void)
 {
 	// エラー発生時のガードインターバル
-	if(dwErrorDelayTime){
-		if((::GetTickCount() - dwErrorDelayTime) < TCP_TIMEOUT)return FALSE;
-		else dwErrorDelayTime = 0UL;
+	if(m_ErrorDelayTime){
+		if((::GetTickCount64() - m_ErrorDelayTime) < TCP_TIMEOUT)return FALSE;
+		else m_ErrorDelayTime = 0ULL;
 		}
 
 	// サーバに接続
@@ -49,7 +51,7 @@ const BOOL CCasProxy::Connect(void)
 		return TRUE;
 		}
 	else{
-		dwErrorDelayTime = ::GetTickCount();
+		m_ErrorDelayTime = ::GetTickCount64();
 //		SendProxyEvent(CPEI_CONNECTFAILED);
 		return FALSE;
 		}
@@ -58,7 +60,7 @@ const BOOL CCasProxy::Connect(void)
 const DWORD CCasProxy::TransmitCommand(const BYTE *pSendData, const DWORD dwSendSize, BYTE *pRecvData)
 {
 	// 送信データ準備
-	BYTE SendBuf[256];
+	BYTE SendBuf[256]{};
 	SendBuf[0] = (BYTE)dwSendSize;
 	::CopyMemory(&SendBuf[1], pSendData, dwSendSize);
 
@@ -72,7 +74,9 @@ const DWORD CCasProxy::TransmitCommand(const BYTE *pSendData, const DWORD dwSend
 		// レスポンスデータ受信
 		if(!m_Socket.Recv(pRecvData, SendBuf[0], TCP_TIMEOUT))throw (const DWORD)__LINE__;
 		}
+#pragma warning(disable: 4101) // warning C4101: "ローカル変数は 1 度も使われていません。"
 	catch(const DWORD dwLine){
+#pragma warning(default: 4101)
 		// 通信エラー発生
 		m_Socket.Close();
 //		SendProxyEvent(CPEI_DISCONNECTED);

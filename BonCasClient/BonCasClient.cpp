@@ -5,17 +5,52 @@
 #include <WinScard.h>
 #include "CasProxy.h"
 
+#include <WS2tcpip.h>
+
 #include <stdlib.h>
 #include <wchar.h>
 #include <stdarg.h>
 #include <tchar.h>
 
+#include <sstream>
+#include <string>
+
 #ifdef _MANAGED
 #pragma managed(push, off)
 #endif
 
-DWORD g_dwIP = 0x7F000001UL;
-WORD g_wPort = 6900UL;
+#define __SPRITTER_CHAR_A	':'
+#define __SPRITTER_CHAR_W	L':'
+#define __SPRITTER_CHAR		_T(__SPRITTER_CHAR_A)
+
+
+using namespace std;
+
+string g_ReaderTableA;
+wstring g_ReaderTableW;
+
+typedef basic_string<TCHAR> tstring;
+
+std::wstring convString(const std::string& input)
+{
+	size_t i;
+	wchar_t* buffer = new wchar_t[input.size() + 1];
+	mbstowcs_s(&i, buffer, input.size() + 1, input.c_str(), _TRUNCATE);
+	std::wstring result = buffer;
+	delete[] buffer;
+	return result;
+}
+
+std::string convString(const std::wstring& input)
+{
+	size_t i;
+	char* buffer = new char[input.size() * MB_CUR_MAX + 1];
+	wcstombs_s(&i, buffer, input.size() * MB_CUR_MAX + 1, input.c_str(), _TRUNCATE);
+	std::string result = buffer;
+	delete[] buffer;
+	return result;
+}
+
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
@@ -37,14 +72,48 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 					_tmakepath_s(szIniPath, _MAX_PATH, szDrive, szDir, szFName, _T("ini"));
 
 					TCHAR szBuff[64] = _T("");
-					::GetPrivateProfileString(_T("Server"), _T("IP"), _T("127.0.0.1"), szBuff, 64, szIniPath);
-					char szHost[64] = "";
-					size_t len = 0;
-					::wcstombs_s(&len, szHost, 64, szBuff, 63);
-					DWORD ip = ::inet_addr(szHost);
-					g_dwIP = ((ip & 0xFF) << 24) + ((ip & 0xFF00) << 8) + ((ip & 0xFF0000) >> 8) + ((ip & 0xFF000000) >> 24);
+					::GetPrivateProfileString(_T("Server"), _T("IP"), _T("127.0.0.1"), szBuff, _countof(szBuff), szIniPath);
+					DWORD wPort = ::GetPrivateProfileInt(_T("Server"), _T("Port"), 6900UL, szIniPath);
 
-					g_wPort = ::GetPrivateProfileInt(_T("Server"), _T("Port"), 6900UL, szIniPath);
+					ostringstream ReaderTableA;
+					wostringstream ReaderTableW;
+
+#ifdef _UNICODE
+					ReaderTableA << convString(wstring(szBuff)) << __SPRITTER_CHAR_A << wPort << '\0';
+					ReaderTableW << szBuff << __SPRITTER_CHAR_W << wPort << L'\0';
+#elif
+					ReaderTableA << szBuff << __SPRITTER_CHAR_A << wPort << '\0';
+					ReaderTableW << convString(string(szBuff)) << __SPRITTER_CHAR_W << wPort << L'\0';
+#endif
+					//以降拡張セクション
+					for (int i = 0; i < 99; i++)
+					{
+						TCHAR key[16];
+						TCHAR buf[1024];
+
+						_stprintf_s(key, _countof(key), _T("Server%02d"), i);
+
+						if( ::GetPrivateProfileString(_T("Server:Port"), key, NULL, buf, _countof(buf), szIniPath) == 0) break;// Keyが見つからなければ終了
+
+						LPCTSTR pszPortStr = _tcsrchr(buf, __SPRITTER_CHAR);
+						int port_num;
+						if (pszPortStr == NULL || (port_num = _tstoi(pszPortStr + 1)) < 0 || port_num > USHRT_MAX) continue;// 不正な形式orポート番号なら読み飛ばす
+
+						tstring server_name = tstring(buf, (int)(pszPortStr - buf));
+
+#ifdef _UNICODE
+						ReaderTableA << convString(server_name) << __SPRITTER_CHAR_A << port_num << '\0';
+						ReaderTableW << server_name << __SPRITTER_CHAR_W << port_num << L'\0';
+#else
+						ReaderTableA << server_name << __SPRITTER_CHAR_A << port_num << '\0';
+						ReaderTableW << convString(server_name) << __SPRITTER_CHAR_W << port_num << L'\0';
+#endif
+					}
+					ReaderTableA << '\0';// 終端子
+					ReaderTableW << L'\0';
+
+					g_ReaderTableA = ReaderTableA.str();
+					g_ReaderTableW = ReaderTableW.str();
 				}
 			}
 			break;
@@ -57,18 +126,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 
 extern "C" __declspec(dllexport) BOOL WINAPI SetConfig(const DWORD dwIP, const WORD wPort)
 {
-	g_dwIP = dwIP;
-	g_wPort = wPort;
 	return TRUE;
 }
 
-LONG CasLinkConnect(LPSCARDHANDLE phCard, LPDWORD pdwActiveProtocol)
+LONG CasLinkConnect(LPSCARDHANDLE phCard, LPDWORD pdwActiveProtocol, DWORD dwIP, WORD wPort)
 {
 	// プロキシインスタンス生成
 	CCasProxy *pCasProxy = new CCasProxy(NULL);
 
 	// IP,Port設定
-	pCasProxy->Setting(g_dwIP, g_wPort);
+	pCasProxy->Setting(dwIP, wPort);
 	
 	// サーバに接続
 	if (!pCasProxy->Connect()) {
@@ -86,12 +153,50 @@ LONG CasLinkConnect(LPSCARDHANDLE phCard, LPDWORD pdwActiveProtocol)
 
 extern "C" __declspec(dllexport) LONG WINAPI CasLinkConnectA(SCARDCONTEXT hContext, LPCSTR szReader, DWORD dwShareMode, DWORD dwPreferredProtocols, LPSCARDHANDLE phCard, LPDWORD pdwActiveProtocol)
 {
-	return CasLinkConnect(phCard, pdwActiveProtocol);
+	LPCSTR p = g_ReaderTableA.c_str();
+
+	while (*p)
+	{
+		if (strcmp(p, szReader) == 0)
+		{
+			LPCSTR port_str = strrchr(p, __SPRITTER_CHAR_A);
+			int port_num;
+			if (port_str == NULL || (port_num = atoi(port_str + 1)) < 0 || port_num > USHRT_MAX) return SCARD_E_READER_UNAVAILABLE;
+
+			string server = string(p, (int)(port_str - p));
+			DWORD ip = 0;
+
+			if (::InetPtonA(AF_INET, server.c_str(), &ip) != 1) return SCARD_E_READER_UNAVAILABLE;
+
+			return CasLinkConnect(phCard, pdwActiveProtocol, htonl(ip), port_num);
+		}
+		p += strlen(p) + 1;
+	}
+	return SCARD_E_READER_UNAVAILABLE;
 }
 
 extern "C" __declspec(dllexport) LONG WINAPI CasLinkConnectW(SCARDCONTEXT hContext, LPCWSTR szReader, DWORD dwShareMode, DWORD dwPreferredProtocols, LPSCARDHANDLE phCard, LPDWORD pdwActiveProtocol)
 {
-	return CasLinkConnect(phCard, pdwActiveProtocol);
+	LPCWSTR p = g_ReaderTableW.c_str();
+
+	while (*p)
+	{
+		if (wcscmp(p, szReader) == 0)
+		{
+			LPCWSTR port_str = wcsrchr(p, __SPRITTER_CHAR_W);
+			int port_num;
+			if (port_str == NULL || (port_num = _wtoi(port_str + 1)) < 0 || port_num > USHRT_MAX) return SCARD_E_READER_UNAVAILABLE;
+
+			wstring server = wstring(p, (int)(port_str - p));
+			DWORD ip = 0;
+
+			if (::InetPtonW(AF_INET, server.c_str(), &ip) != 1) return SCARD_E_READER_UNAVAILABLE;
+
+			return CasLinkConnect(phCard, pdwActiveProtocol, htonl(ip), port_num);
+		}
+		p += wcslen(p) + 1;
+	}
+	return SCARD_E_READER_UNAVAILABLE;
 }
 
 extern "C" __declspec(dllexport) LONG WINAPI CasLinkDisconnect(SCARDHANDLE hCard, DWORD dwDisposition)
@@ -115,36 +220,43 @@ extern "C" __declspec(dllexport) LONG WINAPI CasLinkFreeMemory(SCARDCONTEXT hCon
 
 extern "C" __declspec(dllexport) LONG WINAPI CasLinkListReadersA(SCARDCONTEXT hContext, LPCSTR mszGroups, LPSTR mszReaders, LPDWORD pcchReaders)
 {
-	static const char szReaderName[] = "BonCasLink Client Card Reader\0\0";
-
 	if(pcchReaders){
 		if ((*pcchReaders == SCARD_AUTOALLOCATE) && mszReaders) {
-			*((LPCSTR *)mszReaders) = szReaderName;		
+			*((LPCSTR*)mszReaders) = g_ReaderTableA.c_str();
 			return SCARD_S_SUCCESS;
 		}else{
-			*pcchReaders = sizeof(szReaderName) / sizeof(szReaderName[0]);
+			*pcchReaders = (DWORD)g_ReaderTableA.length();//文字数を返す
 		}
 	}
 
-	if (mszReaders)	::CopyMemory(mszReaders, szReaderName, sizeof(szReaderName));
+	if (mszReaders && pcchReaders)
+	{
+		DWORD len = (*pcchReaders < g_ReaderTableA.length()) ? *pcchReaders : (DWORD)g_ReaderTableA.length();
+
+		::CopyMemory(mszReaders, g_ReaderTableA.c_str(), len * sizeof(char));
+	}
 
 	return SCARD_S_SUCCESS;
 }
 
 extern "C" __declspec(dllexport) LONG WINAPI CasLinkListReadersW(SCARDCONTEXT hContext, LPCWSTR mszGroups, LPWSTR mszReaders, LPDWORD pcchReaders)
 {
-	static const WCHAR szReaderName[] = L"BonCasLink Client Card Reader\0\0";
-
 	if (pcchReaders) {
 		if ((*pcchReaders == SCARD_AUTOALLOCATE) && mszReaders) {
-			*((LPCWSTR *)mszReaders) = szReaderName;		
+			*((LPCWSTR*)mszReaders) = g_ReaderTableW.c_str();
 			return SCARD_S_SUCCESS;
-		}else{
-			*pcchReaders = sizeof(szReaderName) / sizeof(szReaderName[0]);
+		}
+		else {
+			*pcchReaders = (DWORD)g_ReaderTableW.length();//文字数を返す
 		}
 	}
 
-	if (mszReaders)	::CopyMemory(mszReaders, szReaderName, sizeof(szReaderName));
+	if (mszReaders && pcchReaders)
+	{
+		DWORD len = (*pcchReaders < g_ReaderTableW.length()) ? *pcchReaders : (DWORD)g_ReaderTableW.length();
+		
+		::CopyMemory(mszReaders, g_ReaderTableW.c_str(), len * sizeof(wchar_t));
+	}
 
 	return SCARD_S_SUCCESS;
 }

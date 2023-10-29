@@ -2,19 +2,16 @@
 //
 //////////////////////////////////////////////////////////////////////
 
-#include "StdAfx.h"
+#include "stdafx.h"
 #include <StdLib.h>
 #include <Locale.h>
 #include "SmartSock.h"
 
+#include <ws2tcpip.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
-
-
-#pragma warning(disable: 4101) // warning C4101: "ローカル変数は 1 度も使われていません。"
-#pragma warning(disable: 4996) // warning C4996: "This function or variable may be unsafe. Consider using _wsplitpath_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details"
 
 
 #pragma comment(lib, "WS2_32")
@@ -83,7 +80,7 @@ const BOOL CSmartSock::Connect(const DWORD dwIP, const WORD wPort, const DWORD d
 		}
 
 	// アドレス設定
-	SOCKADDR_IN SockAddr;
+	SOCKADDR_IN SockAddr{};
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = ::htons(wPort);
 	SockAddr.sin_addr.S_un.S_addr = ::htonl(dwIP);
@@ -102,8 +99,8 @@ const BOOL CSmartSock::Connect(const DWORD dwIP, const WORD wPort, const DWORD d
 
 	// 非同期コネクト
 	u_long nArg = 1UL;
-	fd_set FdSet;
-	struct timeval TimeVal;
+	fd_set FdSet{};
+	struct timeval TimeVal {};
 	TimeVal.tv_sec = 0UL;
 	TimeVal.tv_usec = dwTimeOut * 1000UL;
 	FD_ZERO(&FdSet);
@@ -132,7 +129,9 @@ const BOOL CSmartSock::Connect(const DWORD dwIP, const WORD wPort, const DWORD d
 		nArg = 0UL;
 		if(::ioctlsocket(m_Socket, FIONBIO, &nArg) == SOCKET_ERROR)throw (const DWORD)__LINE__;
 		}
+#pragma warning(disable: 4101) // warning C4101: "ローカル変数は 1 度も使われていません。"
 	catch(const DWORD dwLine){
+#pragma warning(default: 4101)
 		// エラー発生
 		Close();
 		m_dwLastError = EC_SOCKERROR;
@@ -156,7 +155,7 @@ const BOOL CSmartSock::Listen(const WORD wPort)
 		}
 
 	// アドレス設定
-	SOCKADDR_IN SockAddr;
+	SOCKADDR_IN SockAddr{};
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = ::htons(wPort);
 	SockAddr.sin_addr.S_un.S_addr = INADDR_ANY;
@@ -168,7 +167,9 @@ const BOOL CSmartSock::Listen(const WORD wPort)
 		// 接続受け入れ
 		if(::listen(m_Socket, 5) == SOCKET_ERROR)throw (const DWORD)__LINE__;
 		}
+#pragma warning(disable: 4101) // warning C4101: "ローカル変数は 1 度も使われていません。"
 	catch(const DWORD dwLine){
+#pragma warning(default: 4101)
 		// エラー発生
 		Close();
 		m_dwLastError = EC_SOCKERROR;
@@ -343,7 +344,7 @@ const BOOL CSmartSock::GetLocalAddr(DWORD *pdwIP, WORD *pwPort)
 {
 	CHECK_TCPSOCK(FALSE);
 
-	struct sockaddr_in LocalAddr;
+	struct sockaddr_in LocalAddr {};
 	int AddrLen = sizeof(LocalAddr);
 	
 	// ローカルアドレス取得
@@ -364,7 +365,7 @@ const BOOL CSmartSock::GetPeerAddr(DWORD *pIP, WORD *pPort)
 {
 	CHECK_TCPSOCK(FALSE);
 
-	struct sockaddr_in PeerAddr;
+	struct sockaddr_in PeerAddr {};
 	int AddrLen = sizeof(PeerAddr);
 	
 	// ピアアドレス取得
@@ -392,7 +393,7 @@ const BOOL CSmartSock::Bind()
 		}
 
 	// アドレス設定
-	SOCKADDR_IN SockAddr;
+	SOCKADDR_IN SockAddr{};
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = 0U;
 	SockAddr.sin_addr.S_un.S_addr = INADDR_ANY;
@@ -420,7 +421,7 @@ const DWORD CSmartSock::SendTo(const DWORD dwIP, const WORD wPort, const BYTE *p
 		}
 
 	// アドレス設定
-	SOCKADDR_IN SockAddr;
+	SOCKADDR_IN SockAddr{};
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = ::htons(wPort);
 	SockAddr.sin_addr.S_un.S_addr = ::htonl(dwIP);
@@ -469,7 +470,7 @@ const DWORD CSmartSock::RecvFrom(BYTE *pBuff, const DWORD dwLen, DWORD *pdwIP, W
 
 	// アドレス設定
 	int iSockSize = sizeof(SOCKADDR_IN);
-	SOCKADDR_IN SockAddr;
+	SOCKADDR_IN SockAddr{};
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = 0U;
 	SockAddr.sin_addr.S_un.S_addr = 0UL;
@@ -512,40 +513,43 @@ const BOOL CSmartSock::Close()
 
 const DWORD CSmartSock::HostToIP(LPCTSTR lpszHost)
 {
-#ifdef _UNICODE
-	char szHost[1024] = {"\0"};
-	::wcstombs(szHost, lpszHost, sizeof(szHost) - 1);
-#else
-	LPCSTR szHost = lpszHost;
-#endif
-
 	// ホスト名からIPアドレス取得
-	const DWORD dwIP = ::inet_addr(szHost);
+	DWORD dwIP{};
+	
+	if (::InetPton(AF_INET, lpszHost, &dwIP) != 1)
+	{
+		ADDRINFOT hints, * res;
 
-	if(dwIP == INADDR_NONE){
-		struct hostent *pHost = ::gethostbyname(szHost);
-		if(!pHost){		
-			return INADDR_NONE;
-			}
-		else return *((DWORD *)pHost->h_addr_list[0]);
-		}
-	else return ::htonl(dwIP);
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_family = AF_INET;
+
+		if (::GetAddrInfo(lpszHost, NULL, &hints, &res) != 0) return INADDR_NONE;
+
+		dwIP = ((struct sockaddr_in*)(res->ai_addr))->sin_addr.s_addr;
+
+		::FreeAddrInfo(res);
+
+		return ::htonl(dwIP);
+	}
+
+	return INADDR_NONE;
 }
+
 
 const DWORD CSmartSock::IPToHost(LPTSTR lpszHost, const DWORD dwIP)
 {
-	if(!lpszHost)return FALSE;
+	if (!lpszHost) return 0;
 
 	// IPアドレスからホスト名取得
-	const DWORD dwNetIP = ::htonl(dwIP);
-	struct hostent *pHost = ::gethostbyaddr((const char *)&dwNetIP, sizeof(dwNetIP), AF_INET);
-	if(!pHost)return FALSE;
+	struct sockaddr_in saGNI;
 
-#ifdef _UNICODE
-	::mbstowcs(lpszHost, pHost->h_name, ::lstrlenA(pHost->h_name));
-#else
-	::lstrcpy(lpszHost, pHost->h_name);
-#endif
+	memset(&saGNI, 0, sizeof(saGNI));
+	saGNI.sin_family = AF_INET;
+	saGNI.sin_addr.s_addr = ::htonl(dwIP);
+
+	if (::GetNameInfo((struct sockaddr*)&saGNI, sizeof(struct sockaddr),
+		lpszHost, NI_MAXHOST, NULL, 0, NI_NUMERICSERV) != 0) return 0;
 
 	return ::lstrlen(lpszHost);
 }
@@ -564,7 +568,7 @@ const BOOL CSmartSock::InitWinSock2(void)
 	::setlocale(LC_ALL, "japanese");
 #endif
 
-	// WinSock2初期化
+	// WinSock2初期化	
 	if(::WSAStartup(MAKEWORD(2, 2), &WsaData))return FALSE;
 
 	if((LOBYTE(WsaData.wVersion) != 2U) || (HIBYTE(WsaData.wVersion) != 2U))return FALSE;
