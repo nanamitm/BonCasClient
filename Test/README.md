@@ -59,3 +59,22 @@ enumeration, connection, and APDUs through SCardHub into the mock reader.
 It does not change the original SCardHub configuration or use real cards.
 Provider modules can remain mapped until process exit; temporary provider
 files are therefore removed on a best-effort basis.
+
+## DLL unload/reload regression
+
+`ReloadConsumer.dll` links against the SDK's `WinSCard.lib`, as a decoder
+would. `ReloadTest.exe` stages BonCasClient as `WinSCard.dll`, releases the
+explicit DLL reference and the consumer module, and loads the consumer
+again for three cycles. Each cycle checks the actual import address table
+owner and verifies that the network reader is still enumerated. The test
+runs with local forwarding disabled and with the system provider enabled.
+It fails on the unpinned implementation when the second consumer binds to
+the system WinSCard DLL instead of BonCasClient.
+
+BonCasClient pins itself on the first valid `SCardEstablishContext` call.
+Pinned modules remain mapped until process exit, so the runner removes
+the isolated test directories after each child process has exited. Native
+provider cleanup is skipped during process termination to avoid IPC while
+Windows holds the loader lock. The `exit-active` scenario leaves a native
+context open and fails the process if its release function is called at
+termination.

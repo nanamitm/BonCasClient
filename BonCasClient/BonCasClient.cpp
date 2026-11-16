@@ -37,6 +37,7 @@ using namespace std;
 string g_ReaderTableA;
 wstring g_ReaderTableW;
 std::wstring g_IniPath;
+bool g_ProcessTerminating = false;
 
 typedef basic_string<TCHAR> tstring;
 
@@ -130,6 +131,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 			break;
 
 		case DLL_PROCESS_DETACH:
+            g_ProcessTerminating = lpReserved != NULL;
 			break;
 	}
 	return TRUE;
@@ -165,6 +167,20 @@ struct ApiEntry {
     ApiEntry() { insideApi = true; }
     ~ApiEntry() { insideApi = false; }
 };
+
+// A decoder can unload us while System32's winscard.dll remains loaded.
+// Keep this entry point alive so the next decoder's basename import cannot
+// bind to the system DLL instead. Use our address, not the ambiguous name.
+bool pinModule() {
+    static std::once_flag initialized;
+    static bool pinned = false;
+    std::call_once(initialized, [] {
+        HMODULE module = NULL;
+        pinned = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&__ImageBase), &module) != FALSE;
+    });
+    return pinned;
+}
 
 std::shared_ptr<LocalProvider> localProvider() {
     static std::once_flag initialized;
@@ -335,6 +351,7 @@ API CasLinkEstablishContext(DWORD scope, LPCVOID reserved1, LPCVOID reserved2, L
     TRY_API
     if (!result) return SCARD_E_INVALID_PARAMETER;
     *result = 0;
+    if (!pinModule()) return SCARD_F_INTERNAL_ERROR;
     auto local = std::make_shared<LocalContext>();
     local->provider = localProvider();
     if (local->provider) {

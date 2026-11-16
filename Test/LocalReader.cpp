@@ -34,6 +34,8 @@ API MockEstablish(DWORD scope, LPCVOID, LPCVOID, LPSCARDCONTEXT result) {
     return SCARD_S_SUCCESS;
 }
 API MockRelease(SCARDCONTEXT context) {
+    // Used by the termination test: native cleanup must not run in DllMain.
+    if (mode == 6) ExitProcess(99);
     std::lock_guard<std::mutex> guard(lock);
     if (!contexts.erase(context)) return SCARD_E_INVALID_HANDLE;
     for (auto it = cards.begin(); it != cards.end();) {

@@ -132,8 +132,10 @@ void dllTests(const char* source, bool releaseDuringTransmit, const char* provid
         closesocket(client);
     });
     char temp[MAX_PATH], full[MAX_PATH];
-    assert(GetTempPathA(MAX_PATH, temp));
-    const std::string directory = std::string(temp) + "BonCasSafety-" + std::to_string(GetCurrentProcessId());
+    assert(GetEnvironmentVariableA("BONCAS_TEST_SCRATCH", temp, MAX_PATH));
+    static unsigned sequence = 0;
+    const std::string directory = std::string(temp) + "\\BonCasSafety-" +
+        std::to_string(GetCurrentProcessId()) + "-" + std::to_string(++sequence);
     assert(CreateDirectoryA(directory.c_str(), NULL));
     const std::string dllPath = directory + "\\BonCasClient.dll";
     const std::string iniPath = directory + "\\BonCasClient.ini";
@@ -224,8 +226,7 @@ void dllTests(const char* source, bool releaseDuringTransmit, const char* provid
     server.join();
     assert(FreeLibrary(dll));
     assert(DeleteFileA(iniPath.c_str()));
-    assert(DeleteFileA(dllPath.c_str()));
-    assert(RemoveDirectoryA(directory.c_str()));
+    // The DLL is pinned. The runner removes the directory after this process exits.
 }
 
 int main(int argc, char** argv) {

@@ -7,6 +7,7 @@
 #include <vector>
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
+extern bool g_ProcessTerminating;
 
 // Provider modules stay loaded: a provider may retain callbacks or worker threads.
 // Loading is deferred until an API call, outside DllMain and the loader lock.
@@ -74,7 +75,9 @@ struct LocalContext {
     std::shared_ptr<LocalProvider> provider;
     SCARDCONTEXT handle = 0;
     bool active = false;
-    ~LocalContext() { if (active) provider->release(handle); }
+    // Native cleanup can involve IPC. At process exit the OS reclaims these
+    // resources; calling a provider under the loader lock can deadlock.
+    ~LocalContext() { if (active && !g_ProcessTerminating) provider->release(handle); }
 
     // Called with io held. Never request provider-owned AUTOALLOCATE memory.
     template<class C> std::vector<std::basic_string<C>> readers(const C* groups) {

@@ -50,7 +50,8 @@ int wmain(int argc, wchar_t** argv) {
     auto mode = function<LONG(WINAPI*)(LONG)>(fixture, "FixtureMode");
     auto count = function<LONG(WINAPI*)(LONG)>(fixture, "FixtureCount");
     mode(scenario == L"establish-failed" ? 1 : scenario == L"empty" ? 2 :
-        scenario == L"list-failed" ? 3 : scenario == L"cycle" ? 4 : hub ? 5 : 0);
+        scenario == L"list-failed" ? 3 : scenario == L"cycle" ? 4 :
+        scenario == L"exit-active" ? 6 : hub ? 5 : 0);
     std::wstring configured = readerPath;
     if (scenario == L"missing") configured += L".missing";
     if (scenario == L"relative") configured = L"reader.dll";
@@ -85,6 +86,11 @@ int wmain(int argc, wchar_t** argv) {
     }
     SCARDCONTEXT context = 0, other = 0;
     assert(establish(SCARD_SCOPE_USER, NULL, NULL, &context) == SCARD_S_SUCCESS);
+    if (scenario == L"exit-active") {
+        assert(count(0) == 1);
+        std::wcout << L"Leaving a native context active for the process termination test\n";
+        return 0; // The provider would exit with code 99 if its release were called.
+    }
     DWORD length = 0;
     assert(listW(context, NULL, NULL, &length) == SCARD_S_SUCCESS);
     std::vector<wchar_t> names(length);
