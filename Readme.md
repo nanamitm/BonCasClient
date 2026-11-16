@@ -1,76 +1,177 @@
-
 # BonCasClient
 
-BonCasClient v1.1.1 (http://www2.wazoku.net/2sen/dtvvup/source/BonCasClient(1.1.1).zip) に同梱されているソースコードのミラー。
+BonCasLink（BonCasServer / BonCasService）へ TCP で接続する Windows 用クライアント DLL です。BonCasClient v1.1.1 のソースコードを基に、複数の接続先の選択と安定性の改善を加えています。
 
-既存パッチと接続先選択機能に加え、通信のタイムアウト・接続判定、バッファ長検証、カードハンドルの寿命管理を改善している。ビルドには Visual Studio の v143 C++ ツールセットと Windows SDK を使用する。
+## この fork の特徴
 
-既存の `[Server]` と `[Server:Port]`（`Server00` から始まる連番）の設定形式、および `IP:ポート` のリーダー名は維持する。接続失敗後の1秒待機は接続先ごとに管理する。呼び出し元は `SCardEstablishContext` が返したコンテキストを使用し、`SCARD_AUTOALLOCATE` で取得した一覧は同じコンテキストの `SCardFreeMemory` で解放する。バッファ不足時には必要長と `SCARD_E_INSUFFICIENT_BUFFER` を返し、出力バッファを書き換えない。
+- 複数のサーバー・ポートを登録し、利用ソフトのリーダー選択で接続先を切り替えられます。
+- リーダー名は `IP:ポート` です。既存の `[Server]` / `[Server:Port]` の設定形式を使用します。
+- 通信のタイムアウト・接続判定・切断処理、バッファ長検証、カードハンドルの寿命管理を改善しています。
+- 接続失敗後の1秒待機を接続先ごとに管理し、他の接続先への影響を抑えています。
+- x86・x64 の DLL を GitHub Actions でビルドし、回帰テストを実行します。
 
-x86・x64 の自動ビルドと回帰テストを GitHub Actions で実行する。ローカルでの実行方法と取り込み元は [Test/README.md](Test/README.md) を参照。
+## 入手・導入
 
-以下のドキュメントは [BonCasClient.txt](BonCasClient.txt) を現状に合わせて一部改変し、Markdown 形式に書き換えたものである。  
-オリジナルの [BonCasClient.txt](BonCasClient.txt) も参照されたい。
+### このリポジトリのビルドを入手する
 
-### 利用時の注意
+1. [GitHub Actions の build](https://github.com/nanamitm/BonCasClient/actions/workflows/build.yml) を開きます。
+2. `master` ブランチの成功した実行を選びます。
+3. 実行画面の **Artifacts** から、利用ソフトのビット数に合う ZIP をダウンロードします。ダウンロードには GitHub へのログインが必要です。
 
-BonCasClient のビット数 (32bit or 64bit) は、各種 WinSCard.dll 同様に TVTest などの BonCasClient を利用するソフトに合わせる必要がある。  
-さもなければ、ライブラリの読み込みに失敗し、スクランブルの解除に失敗する。
+| 利用ソフト | Artifact | DLL |
+| --- | --- | --- |
+| 32bit（x86） | `BonCasClient-Win32` | 32bit 版 `BonCasClient.dll` |
+| 64bit（x64） | `BonCasClient-x64` | 64bit 版 `BonCasClient.dll` |
 
-ただし、BonCasClient と BonCasLink (BonCasServer, BonCasService) が異なるビット数になっている事は問題ない。  
-BonCasClient と BonCasLink が TCP で通信しているためで、たとえば TVTest と BonCasClient が 64bit 、BonCasLink が 32bit の場合でも正常に読み込める。
+Artifacts には保存期限があります。入手できない場合は、後述の手順でソースコードからビルドできます。
 
-----
+### DLL と設定ファイルを配置する
 
-## BonCasClient.dll
+ZIP を展開し、利用ソフトが指定する場所に DLL を配置します。読み込み方法や DLL 名は利用ソフトの説明に従ってください。接続先を設定する INI は、DLL と同じフォルダに配置します。
 
-BonCasLink のクライアントインターフェースを実装した DLL。  
-EXPORT されている IF は SCardXXXX と型互換の以下9関数 CasLinkXXXX と、
-- CasLinkConnectA
-- CasLinkConnectW
-- CasLinkDisconnect
-- CasLinkEstablishContext
-- CasLinkFreeMemory
-- CasLinkListReadersA
-- CasLinkListReadersW
-- CasLinkTransmit
-- CasLinkReleaseContext
+DLL のビット数は **Windows ではなく、DLL を読み込む利用ソフト**に合わせてください。64bit Windows 上で32bit の利用ソフトを使う場合は x86 版が必要です。
 
-接続先を設定する1関数、
+クライアントと BonCasLink サーバーのビット数は、TCP 通信のため一致する必要がありません。
 
-- void SetConfig(const DWORD dwIP, const WORD wPort)
+### Visual C++ ランタイム
 
-が実装されています。
+このリポジトリの v143 ビルドには、対応する Microsoft Visual C++ v14 再頒布可能パッケージが必要です。[Microsoft の公式ダウンロード案内](https://learn.microsoft.com/ja-jp/cpp/windows/latest-supported-vc-redist)から、使用する DLL に合う x86 または x64 のパッケージをインストールしてください。ランタイムはビルドに使用した MSVC と同じバージョン以降が必要です。
 
-## ダウンロード
+### 参考・旧版
 
-[BonCasClient v1.1.1-patch](https://github.com/mizunoko/BonCasClient/releases/download/v1.1.1-patch/BonCasClient_v1.1.1-patch.zip)
+[別 fork の BonCasClient v1.1.1-patch](https://github.com/mizunoko/BonCasClient/releases/download/v1.1.1-patch/BonCasClient_v1.1.1-patch.zip) は従来の配布物です。このリポジトリで追加した接続先選択や安定性改善を含むビルドとは異なります。
 
-## 設定
+## 接続先の設定
 
-接続先は DLL と同じフォルダの BonCasClient.ini を作成して設定することも出来ます。  
-書式及びデフォルト設定 ( ini がない場合) は以下の通りです。
+### INI の場所と名前
 
-    [Server]
-    IP=127.0.0.1
-    Port=6900
+INI の名前は **DLL と同じベース名 + `.ini`** です。
 
-## VC2019 のランタイムが必要です
+| DLL | 設定ファイル |
+| --- | --- |
+| `BonCasClient.dll` | 同じフォルダの `BonCasClient.ini` |
+| `winscard.dll` にリネームした場合 | 同じフォルダの `winscard.ini` |
 
-Visual Studio 2019 の Microsoft Visual C++ 再頒布可能パッケージ  
-32bit (x86) 版 … https://aka.ms/vs/16/release/VC_redist.x86.exe  
-64bit (x64) 版 … https://aka.ms/vs/16/release/VC_redist.x64.exe  
-(使う DLL により必要なランタイムも x86、x64 で異なります。x64 の OS なら両方入れておいても問題ありません)  
+設定は DLL の読み込み時に読み込まれます。変更後は、利用ソフトを再起動してください。
 
-また、Windows Update による更新があれば最新にしてください。  
-(開発環境側も Windows Update により必要な環境が更新されている場合があります)
+### 単一の接続先
 
-## ベースにしたもの
+```ini
+[Server]
+IP=127.0.0.1
+Port=6900
+```
 
-- Multi2Dec Ver.2.10 (http://2sen.dip.jp/dtv/)
+INI がない場合も、この接続先が既定値になります。リーダー一覧には `127.0.0.1:6900` と表示されます。
+
+### 複数の接続先
+
+`[Server]` の接続先に加えて、`[Server:Port]` に追加の接続先を登録します。
+
+```ini
+[Server]
+IP=127.0.0.1
+Port=6900
+
+[Server:Port]
+Server00=127.0.0.1:6901
+Server01=192.168.1.20:6900
+```
+
+この例では、次の順番でリーダーが表示されます。
+
+1. `127.0.0.1:6900`
+2. `127.0.0.1:6901`
+3. `192.168.1.20:6900`
+
+利用ソフトがリーダー選択に対応している場合、その設定画面や設定ファイルで上記の名前を選択してください。設定項目や操作方法は利用ソフトに依存します。
+
+### 設定時の注意
+
+- 接続先には IPv4 アドレスと、1〜65535 のポート番号を指定してください。ホスト名や IPv6 アドレスには対応していません。
+- 追加のキーは `Server00` から `Server98` まで、欠番のない連番で指定します。キーが存在しない、または値が空の場合、その時点で追加設定の読み込みを終了します。
+- 任意の表示名を付ける機能はありません。リーダー名には `IP:ポート` を使用します。
+- 別のカードを使うには、対応するサーバー・ポートを用意してください。
+- この fork には、ローカルの実機リーダーを転送する機能や `[Readers]` 形式の設定は含まれていません。
+
+## 接続できないとき
+
+| 症状 | 確認すること |
+| --- | --- |
+| DLL を読み込めない | 利用ソフトと DLL のビット数、Visual C++ ランタイム、DLL の配置場所 |
+| 接続先が一覧に出ない | INI の名前と配置、`[Server:Port]` のキーの欠番・空欄、変更後の利用ソフト再起動 |
+| リーダーは表示されるが接続できない | IPv4 アドレス・ポート、BonCasLink サーバーの稼働状態、ネットワーク・ファイアウォール設定 |
+
+一覧への表示は、接続先サーバーが稼働していることを保証しません。接続失敗直後は、その接続先への再接続を1秒間抑制します。
+
+## ビルドとテスト
+
+Visual Studio の「C++ によるデスクトップ開発」、MSVC v143 の x86/x64 ビルドツール、Windows SDK を用意してください。CI では `windows-2022` 上の v143 を使用しています。
+
+リポジトリのルートで、使用するアーキテクチャの Visual Studio 開発者 PowerShell から実行します。
+
+```powershell
+# x64 の開発者 PowerShell
+./Test/Run.ps1 -Platform x64
+
+# x86 の開発者 PowerShell
+./Test/Run.ps1 -Platform Win32
+```
+
+このスクリプトは Release DLL のビルドと回帰テストを実行します。DLL の出力先は x64 が `x64/Release/BonCasClient.dll`、x86 が `Release/BonCasClient.dll` です。
+
+テストはローカルの模擬 TCP サーバーを使用し、タイムアウト、接続失敗の分離、既存 INI 形式、バッファ保護、送受信中の切断・コンテキスト解放などを検証します。カードリーダーや BonCasServer は不要です。詳細は [Test/README.md](Test/README.md) を参照してください。
+
+**検証範囲：** x86・x64 のビルドと自動回帰テストを確認しています。実機カードリーダー、BonCasLink サーバー、各デコーダー・利用ソフトを組み合わせた動作確認は別途必要です。
+
+## 開発者向け API
+
+以下の9関数をエクスポートし、対応する `SCardXXXX` の名前でも公開しています。
+
+- `CasLinkConnectA` / `CasLinkConnectW`
+- `CasLinkDisconnect`
+- `CasLinkEstablishContext`
+- `CasLinkFreeMemory`
+- `CasLinkListReadersA` / `CasLinkListReadersW`
+- `CasLinkTransmit`
+- `CasLinkReleaseContext`
+
+WinSCard の全 API を実装するものではありません。公開名は [BonCasClient.def](BonCasClient/BonCasClient.def) を参照してください。
+
+呼び出し時には次に注意してください。
+
+- `SCardEstablishContext` が返したコンテキストを、一覧取得や接続に使用します。
+- `SCARD_AUTOALLOCATE` で取得したリーダー一覧は、同じコンテキストの `SCardFreeMemory` で解放します。コンテキスト解放時にも、そのコンテキストに属する未解放の一覧とカードを解放します。
+- 一覧や応答の出力バッファが不足する場合は、必要長と `SCARD_E_INSUFFICIENT_BUFFER` を返し、データを出力バッファへコピーしません。送受信の場合、サーバーとの通信自体は実行済みです。
+- 送信コマンド長は1〜255バイトです。
+- 無効なハンドル、解放済みのハンドルやコンテキストはエラーになります。
+
+互換性のため、次の関数も公開しています。
+
+```cpp
+BOOL WINAPI SetConfig(const DWORD dwIP, const WORD wPort);
+```
+
+**現在の `SetConfig` は `TRUE` を返すだけで、接続先を変更しません。** 接続先の設定には INI を使用してください。
+
+## 由来と変更履歴
+
+BonCasClient v1.1.1 に同梱されていたソースコードを基にしています。オリジナルの説明は [BonCasClient.txt](BonCasClient.txt) に保存しています。現在の fork と設定・動作が異なる場合は、この README と実装を参照してください。
+
+ベースにしたもの：
+
+- Multi2Dec Ver.2.10
 - BonCasLink Ver.1.10 z1
+- 既存の [BonCasClient_fix.diff.txt](BonCasClient_fix.diff.txt)
 
-## 履歴
+通信修正などの取り込み元は [Test/README.md](Test/README.md) に記載しています。
 
-- 2011/09/25 … 64bit用DLL追加
-- 2010/11/11 … 実験品
+主な変更：
+
+- 複数接続先の選択、Visual Studio v143 への更新。
+- 通信・バッファ・ハンドル管理の改善と、x86/x64 の CI・回帰テスト追加。
+
+オリジナルの履歴：
+
+- 2011/09/25：64bit 用 DLL 追加。
+- 2010/11/11：実験品。
