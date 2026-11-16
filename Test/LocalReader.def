@@ -1,0 +1,12 @@
+EXPORTS
+    SCardEstablishContext=MockEstablish
+    SCardReleaseContext=MockRelease
+    SCardListReadersA=MockListA
+    SCardListReadersW=MockListW
+    SCardConnectA=MockConnectA
+    SCardConnectW=MockConnectW
+    SCardDisconnect=MockDisconnect
+    SCardTransmit=MockTransmit
+    FixtureMode
+    FixtureParent
+    FixtureCount

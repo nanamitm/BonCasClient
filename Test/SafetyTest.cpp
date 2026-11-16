@@ -115,7 +115,7 @@ template<class F> F load(HMODULE dll, const char* name) {
     return reinterpret_cast<F>(address);
 }
 
-void dllTests(const char* source, bool releaseDuringTransmit) {
+void dllTests(const char* source, bool releaseDuringTransmit, const char* provider = NULL) {
     Listener listener;
     std::atomic<bool> transmitting(false);
     std::thread server([&] {
@@ -143,6 +143,11 @@ void dllTests(const char* source, bool releaseDuringTransmit) {
         std::ofstream config(iniPath);
         config << "[Server]\nIP=127.0.0.1\nPort=" << listener.port
             << "\n[Server:Port]\nServer00=127.0.0.1:1\n";
+        if (provider) {
+            char path[MAX_PATH];
+            assert(GetFullPathNameA(provider, MAX_PATH, path, NULL));
+            config << "[Local]\nEnable=1\nPath=" << path << "\n";
+        }
     }
     HMODULE dll = LoadLibraryA(dllPath.c_str());
     assert(dll);
@@ -184,7 +189,8 @@ void dllTests(const char* source, bool releaseDuringTransmit) {
     SCARDHANDLE card = 123;
     DWORD protocol = 0;
     assert(connectA(context, NULL, 0, 0, &card, NULL) == SCARD_E_INVALID_PARAMETER && card == 0);
-    assert(connectA(context, "missing", 0, 0, &card, NULL) == SCARD_E_READER_UNAVAILABLE);
+    assert(connectA(context, "missing", 0, 0, &card, NULL) ==
+        (provider ? SCARD_E_UNKNOWN_READER : SCARD_E_READER_UNAVAILABLE));
     const std::wstring wideExpected(expected.begin(), expected.end());
     assert(connectW(context, wideExpected.c_str(), SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
         &card, &protocol) == SCARD_S_SUCCESS && protocol == SCARD_PROTOCOL_T1);
@@ -223,13 +229,14 @@ void dllTests(const char* source, bool releaseDuringTransmit) {
 }
 
 int main(int argc, char** argv) {
-    assert(argc == 2);
+    assert(argc == 2 || argc == 3);
     WSADATA data;
     assert(!WSAStartup(MAKEWORD(2, 2), &data));
     socketTests();
     backoffTests();
     dllTests(argv[1], true);
     dllTests(argv[1], false);
+    if (argc == 3) dllTests(argv[1], true, argv[2]);
     WSACleanup();
     std::cout << "Transport, buffer, legacy INI, and handle lifetime tests passed\n";
 }

@@ -20,6 +20,8 @@
 #include <mutex>
 #include <limits>
 #include <vector>
+#include <algorithm>
+#include "LocalProvider.h"
 
 #ifdef _MANAGED
 #pragma managed(push, off)
@@ -34,6 +36,7 @@ using namespace std;
 
 string g_ReaderTableA;
 wstring g_ReaderTableW;
+std::wstring g_IniPath;
 
 typedef basic_string<TCHAR> tstring;
 
@@ -76,6 +79,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 
 					TCHAR szIniPath[_MAX_PATH] = _T("");
 					_tmakepath_s(szIniPath, _MAX_PATH, szDrive, szDir, szFName, _T("ini"));
+
+					g_IniPath = szIniPath;
 
 					TCHAR szBuff[64] = _T("");
 					::GetPrivateProfileString(_T("Server"), _T("IP"), _T("127.0.0.1"), szBuff, _countof(szBuff), szIniPath);
@@ -141,14 +146,70 @@ struct Card {
     SCARDCONTEXT context;
     std::mutex io;
     bool active = true;
+    std::shared_ptr<LocalContext> local;
+    SCARDHANDLE native = 0;
     explicit Card(SCARDCONTEXT owner) : proxy(NULL), context(owner) {}
 };
 std::mutex registryLock;
 std::set<SCARDCONTEXT> contexts;
+std::map<SCARDCONTEXT, std::shared_ptr<LocalContext>> localContexts;
 std::map<SCARDHANDLE, std::shared_ptr<Card>> cards;
 std::map<const void*, SCARDCONTEXT> allocations;
 SCARDCONTEXT nextContext = 1;
 SCARDHANDLE nextCard = 1;
+
+// Recursive entry from a configured provider (including a Hub cycle) fails
+// before taking locks or re-entering call_once.
+thread_local bool insideApi = false;
+struct ApiEntry {
+    ApiEntry() { insideApi = true; }
+    ~ApiEntry() { insideApi = false; }
+};
+
+std::shared_ptr<LocalProvider> localProvider() {
+    static std::once_flag initialized;
+    static std::shared_ptr<LocalProvider> provider;
+    std::call_once(initialized, [] {
+        if (g_IniPath.empty() || GetPrivateProfileIntW(L"Local", L"Enable", 0, g_IniPath.c_str()) != 1)
+            return;
+        std::vector<wchar_t> path(32768, 0);
+        const DWORD length = GetPrivateProfileStringW(L"Local", L"Path", L"", path.data(),
+            static_cast<DWORD>(path.size()), g_IniPath.c_str());
+        if (length >= path.size() - 1) return;
+        std::wstring dll(path.data(), length);
+        if (dll.empty()) {
+            wchar_t system[MAX_PATH];
+            const UINT n = GetSystemDirectoryW(system, MAX_PATH);
+            if (!n || n >= MAX_PATH) return;
+            dll.assign(system, n);
+            dll += L"\\winscard.dll";
+        }
+        auto candidate = std::make_shared<LocalProvider>();
+        if (candidate->load(dll)) provider = candidate;
+    });
+    return provider;
+}
+
+template<class C> std::basic_string<C> combinedReaders(SCARDCONTEXT context, const C* groups,
+                                                     const std::basic_string<C>& network) {
+    std::shared_ptr<LocalContext> local;
+    {
+        std::lock_guard<std::mutex> guard(registryLock);
+        auto it = localContexts.find(context);
+        if (it != localContexts.end()) local = it->second;
+    }
+    std::basic_string<C> result = network;
+    if (local) {
+        std::lock_guard<std::mutex> io(local->io);
+        for (const auto& name : local->readers(groups)) {
+            bool duplicate = false;
+            for (const C* entry = result.c_str(); *entry; entry += std::char_traits<C>::length(entry) + 1)
+                if (name == entry) { duplicate = true; break; }
+            if (!duplicate) result.insert(result.size() - 1, name + C(0));
+        }
+    }
+    return result;
+}
 
 // Never reuse tokens: stale handles cannot refer to a new card/context.
 template<class T> T token(T& next) {
@@ -179,7 +240,8 @@ template<class C> LONG listReaders(SCARDCONTEXT context, const std::basic_string
 }
 
 template<class C> LONG connectReader(SCARDCONTEXT context, const C* name,
-    const std::basic_string<C>& names, LPSCARDHANDLE result, LPDWORD protocol) {
+    const std::basic_string<C>& names, DWORD share, DWORD protocols,
+    LPSCARDHANDLE result, LPDWORD protocol) {
     if (!result) return SCARD_E_INVALID_PARAMETER;
     *result = 0;
     if (!name) return SCARD_E_INVALID_PARAMETER;
@@ -218,40 +280,76 @@ template<class C> LONG connectReader(SCARDCONTEXT context, const C* name,
         if (protocol) *protocol = SCARD_PROTOCOL_T1;
         return SCARD_S_SUCCESS;
     }
-    return SCARD_E_READER_UNAVAILABLE;
+    auto it = localContexts.find(context);
+    if (it == localContexts.end()) return SCARD_E_READER_UNAVAILABLE;
+    const auto local = it->second;
+    guard.unlock();
+    auto card = std::make_shared<Card>(context);
+    std::lock_guard<std::mutex> io(local->io);
+    if (!local->active) return SCARD_E_INVALID_HANDLE;
+    SCARDHANDLE native = 0;
+    DWORD active = 0;
+    const LONG rc = local->provider->connect(local->handle, name, share, protocols, &native, &active);
+    if (rc != SCARD_S_SUCCESS) return rc;
+    try {
+        guard.lock();
+        if (!contexts.count(context)) {
+            guard.unlock();
+            local->provider->disconnect(native, SCARD_LEAVE_CARD);
+            return SCARD_E_INVALID_HANDLE;
+        }
+        const SCARDHANDLE handle = token(nextCard);
+        card->local = local;
+        card->native = native;
+        cards.emplace(handle, card);
+        *result = handle;
+        if (protocol) *protocol = active;
+    } catch (...) {
+        if (guard.owns_lock()) guard.unlock();
+        local->provider->disconnect(native, SCARD_LEAVE_CARD);
+        throw;
+    }
+    return SCARD_S_SUCCESS;
 }
 }
 
 // No C++ exception may escape the DLL's C ABI.
 #define API extern "C" __declspec(dllexport) LONG WINAPI
-#define TRY_API try {
+#define TRY_API try { if (insideApi) return SCARD_F_INTERNAL_ERROR; ApiEntry apiEntry;
 #define END_API } catch (const std::bad_alloc&) { return SCARD_E_NO_MEMORY; } \
     catch (...) { return SCARD_F_INTERNAL_ERROR; }
 
-API CasLinkConnectA(SCARDCONTEXT context, LPCSTR name, DWORD, DWORD,
+API CasLinkConnectA(SCARDCONTEXT context, LPCSTR name, DWORD share, DWORD protocols,
                    LPSCARDHANDLE result, LPDWORD protocol) {
     TRY_API
-    return connectReader(context, name, g_ReaderTableA, result, protocol);
+    return connectReader(context, name, g_ReaderTableA, share, protocols, result, protocol);
     END_API
 }
-API CasLinkConnectW(SCARDCONTEXT context, LPCWSTR name, DWORD, DWORD,
+API CasLinkConnectW(SCARDCONTEXT context, LPCWSTR name, DWORD share, DWORD protocols,
                    LPSCARDHANDLE result, LPDWORD protocol) {
     TRY_API
-    return connectReader(context, name, g_ReaderTableW, result, protocol);
+    return connectReader(context, name, g_ReaderTableW, share, protocols, result, protocol);
     END_API
 }
-API CasLinkEstablishContext(DWORD, LPCVOID, LPCVOID, LPSCARDCONTEXT result) {
+API CasLinkEstablishContext(DWORD scope, LPCVOID reserved1, LPCVOID reserved2, LPSCARDCONTEXT result) {
     TRY_API
     if (!result) return SCARD_E_INVALID_PARAMETER;
     *result = 0;
+    auto local = std::make_shared<LocalContext>();
+    local->provider = localProvider();
+    if (local->provider) {
+        local->active = local->provider->establish(scope, reserved1, reserved2, &local->handle) == SCARD_S_SUCCESS;
+    }
     std::lock_guard<std::mutex> guard(registryLock);
     const SCARDCONTEXT context = token(nextContext);
     contexts.insert(context);
+    try { if (local->active) localContexts.emplace(context, local); }
+    catch (...) { contexts.erase(context); throw; }
     *result = context;
     return SCARD_S_SUCCESS;
     END_API
 }
-API CasLinkDisconnect(SCARDHANDLE handle, DWORD) {
+API CasLinkDisconnect(SCARDHANDLE handle, DWORD disposition) {
     TRY_API
     std::shared_ptr<Card> card;
     {
@@ -259,22 +357,37 @@ API CasLinkDisconnect(SCARDHANDLE handle, DWORD) {
         auto it = cards.find(handle);
         if (it == cards.end()) return SCARD_E_INVALID_HANDLE;
         card = it->second;
-        cards.erase(it);
     }
     std::lock_guard<std::mutex> io(card->io);
+    if (!card->active) return SCARD_E_INVALID_HANDLE;
+    if (card->local) {
+        std::lock_guard<std::mutex> localIo(card->local->io);
+        if (!card->local->active) return SCARD_E_INVALID_HANDLE;
+        const LONG rc = card->local->provider->disconnect(card->native, disposition);
+        if (rc != SCARD_S_SUCCESS) return rc;
+        card->native = 0;
+    }
     card->active = false;
+    std::lock_guard<std::mutex> guard(registryLock);
+    cards.erase(handle);
     return SCARD_S_SUCCESS;
     END_API
 }
 API CasLinkReleaseContext(SCARDCONTEXT context) {
     TRY_API
     std::vector<std::shared_ptr<Card>> retired;
+    std::shared_ptr<LocalContext> local;
     {
         std::lock_guard<std::mutex> guard(registryLock);
         if (!contexts.count(context)) return SCARD_E_INVALID_HANDLE;
         // Reserve before modifying state so allocation failure leaves it intact.
         retired.reserve(cards.size());
         contexts.erase(context);
+        auto nativeContext = localContexts.find(context);
+        if (nativeContext != localContexts.end()) {
+            local = nativeContext->second;
+            localContexts.erase(nativeContext);
+        }
         for (auto it = cards.begin(); it != cards.end();) {
             if (it->second->context == context) {
                 retired.push_back(it->second);
@@ -292,6 +405,12 @@ API CasLinkReleaseContext(SCARDCONTEXT context) {
         std::lock_guard<std::mutex> io(card->io);
         card->active = false;
     }
+    if (local) {
+        std::lock_guard<std::mutex> io(local->io);
+        const LONG rc = local->provider->release(local->handle);
+        if (rc == SCARD_S_SUCCESS) local->active = false;
+        return rc;
+    }
     return SCARD_S_SUCCESS;
     END_API
 }
@@ -306,20 +425,20 @@ API CasLinkFreeMemory(SCARDCONTEXT context, LPCVOID memory) {
     return SCARD_S_SUCCESS;
     END_API
 }
-API CasLinkListReadersA(SCARDCONTEXT context, LPCSTR, LPSTR output, LPDWORD length) {
+API CasLinkListReadersA(SCARDCONTEXT context, LPCSTR groups, LPSTR output, LPDWORD length) {
     TRY_API
-    return listReaders(context, g_ReaderTableA, output, length);
+    return listReaders(context, combinedReaders(context, groups, g_ReaderTableA), output, length);
     END_API
 }
-API CasLinkListReadersW(SCARDCONTEXT context, LPCWSTR, LPWSTR output, LPDWORD length) {
+API CasLinkListReadersW(SCARDCONTEXT context, LPCWSTR groups, LPWSTR output, LPDWORD length) {
     TRY_API
-    return listReaders(context, g_ReaderTableW, output, length);
+    return listReaders(context, combinedReaders(context, groups, g_ReaderTableW), output, length);
     END_API
 }
-API CasLinkTransmit(SCARDHANDLE handle, LPCSCARD_IO_REQUEST, LPCBYTE send, DWORD sendLength,
+API CasLinkTransmit(SCARDHANDLE handle, LPCSCARD_IO_REQUEST sendPci, LPCBYTE send, DWORD sendLength,
                     LPSCARD_IO_REQUEST recvPci, LPBYTE recv, LPDWORD recvLength) {
     TRY_API
-    if (!send || !sendLength || sendLength > 255 || !recvLength || !recv)
+    if (!send || !sendLength || !recvLength || !recv)
         return SCARD_E_INVALID_PARAMETER;
     if (recvPci && recvPci->cbPciLength < sizeof(SCARD_IO_REQUEST))
         return SCARD_E_INSUFFICIENT_BUFFER;
@@ -332,6 +451,13 @@ API CasLinkTransmit(SCARDHANDLE handle, LPCSCARD_IO_REQUEST, LPCBYTE send, DWORD
     }
     std::lock_guard<std::mutex> io(card->io);
     if (!card->active) return SCARD_E_INVALID_HANDLE;
+    if (card->local) {
+        std::lock_guard<std::mutex> localIo(card->local->io);
+        if (!card->local->active) return SCARD_E_INVALID_HANDLE;
+        return card->local->provider->transmit(card->native, sendPci, send, sendLength,
+            recvPci, recv, recvLength);
+    }
+    if (sendLength > 255) return SCARD_E_INVALID_PARAMETER;
     BYTE response[255];
     const DWORD length = card->proxy.TransmitCommand(send, sendLength, response);
     const DWORD capacity = *recvLength;

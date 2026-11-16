@@ -176,6 +176,7 @@
   <ItemGroup>
     <ClInclude Include="..\Common\SmartSock.h" />
     <ClInclude Include="CasProxy.h" />
+    <ClInclude Include="LocalProvider.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>

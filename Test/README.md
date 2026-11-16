@@ -27,6 +27,35 @@ The transport fixes and endpoint backoff are adapted from stuayu/BonCasClient:
 - https://github.com/stuayu/BonCasClient/commit/3094d9887e1c0644778bf00b7be1810e7e426ddd
 
 The API guards and registry are implemented against this fork's existing
-endpoint-name configuration. Rust, the `[Readers]` format, local reader
-forwarding, and additional WinSCard exports are not included. `SetConfig`
-retains this fork's existing no-op behavior.
+endpoint-name configuration. Rust, the `[Readers]` format, and additional
+WinSCard exports are not included. `SetConfig` retains this fork's existing
+no-op behavior.
+
+## Local WinSCard provider tests
+
+`Run.ps1` also builds `LocalReader.dll` and `LocalProviderTest.exe`. Each
+scenario runs in a separate process with an isolated UTF-16 INI and a DLL
+filename containing Unicode characters. The tests cover A/W enumeration,
+deduplication, automatic allocation, share/protocol forwarding, APDUs over
+255 bytes, native handle translation, provider errors, and disconnect or
+context release during a transmit. The original network tests also run
+with the local provider enabled.
+
+Failure scenarios include disabled configuration, missing/relative/self
+paths, a DLL without the required exports, failed context establishment,
+empty/failed enumeration, and recursive calls back into BonCasClient.
+No extra WinSCard exports beyond the existing nine APIs are required by
+this feature; enumeration uses caller-owned buffers in the provider.
+
+To check a locally built SCardHub of matching architecture after running
+the suite, use the following command (x64 example):
+
+```powershell
+./artifacts/LocalProviderTest.exe x64/Release/BonCasClient.dll artifacts/LocalReader.dll hub C:\FreeSoftwere\git\SCardHub\x64\Release\WinSCard.dll
+```
+
+This stages a copy of SCardHub with an isolated `SCardHub.ini`, and routes
+enumeration, connection, and APDUs through SCardHub into the mock reader.
+It does not change the original SCardHub configuration or use real cards.
+Provider modules can remain mapped until process exit; temporary provider
+files are therefore removed on a best-effort basis.
