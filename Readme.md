@@ -108,10 +108,10 @@ Port=6900
 
 [Local]
 Enable=1
-Path=C:\FreeSoftwere\git\SCardHub\x64\Release\WinSCard.dll
+Path=C:\WinSCard.dll
 ```
 
-32bit 版を使用する場合は、SCardHub の `Win32\Release\WinSCard.dll` など、対応する DLL を指定してください。**利用ソフト・BonCasClient・指定する DLL・その配下のリーダー DLL のビット数を合わせる必要があります。** SCardHub 自体のリーダー登録は、SCardHub 側の `SCardHub.ini` で行います。
+`C:\WinSCard.dll` は使用例です。使用する DLL の配置先に合わせて変更してください。32bit 版を使用する場合は、32bit の DLL を指定します。**利用ソフト・BonCasClient・指定する DLL・その配下のリーダー DLL のビット数を合わせる必要があります。** SCardHub 自体のリーダー登録は、SCardHub 側の `SCardHub.ini` で行います。
 
 - リーダー一覧は、ネットワークリーダー、指定 DLL のリーダーの順です。同じ名前は重複表示せず、ネットワークリーダーを優先します。
 - 指定 DLL のリーダー名を選ぶと、接続・送受信・切断をその DLL に転送します。共有モードとプロトコル、DLL が返すエラーも転送します。

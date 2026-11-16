@@ -51,7 +51,7 @@ To check a locally built SCardHub of matching architecture after running
 the suite, use the following command (x64 example):
 
 ```powershell
-./artifacts/LocalProviderTest.exe x64/Release/BonCasClient.dll artifacts/LocalReader.dll hub C:\FreeSoftwere\git\SCardHub\x64\Release\WinSCard.dll
+./artifacts/LocalProviderTest.exe x64/Release/BonCasClient.dll artifacts/LocalReader.dll hub C:\WinSCard.dll
 ```
 
 This stages a copy of SCardHub with an isolated `SCardHub.ini`, and routes
